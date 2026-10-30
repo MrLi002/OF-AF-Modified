@@ -34,13 +34,29 @@ class SepConvGRU(nn.Module):
 
 
 class Query(nn.Module):
-    def __init__(self, base_channel):
+    def __init__(self, base_channel, fix_query=False):
         super().__init__()
+        self.fix_query = fix_query
 
     def forward(self, if0, flowti, flowtj, ctxti, ctxtj, t):
-        flowt0 = flowti * t + flowtj * (1 - t)
-        ctxt0 = ctxti * t + ctxtj * (1-t)
-        return flowt0, ctxt0
+        if self.fix_query:
+            return flowti * (1 - t) + flowtj * t, ctxti * (1 - t) + ctxtj * t
+        return flowti * t + flowtj * (1 - t), ctxti * t + ctxtj * (1 - t)
+
+
+def conv1x1(ch_in, ch_out):
+    return nn.Conv2d(ch_in, ch_out, kernel_size=1)
+
+
+def conv3x3(ch_in, ch_out):
+    return nn.Conv2d(ch_in, ch_out, kernel_size=3, padding=1)
+
+
+def conv_resblock_one(ch_in, ch_out):
+    return nn.Sequential(
+        nn.Conv2d(ch_in, ch_out, 3, padding=1), nn.ReLU(inplace=True),
+        nn.Conv2d(ch_out, ch_out, 3, padding=1)
+    )
 
 
 class OffsetEstimator(nn.Module):
@@ -71,10 +87,10 @@ class OffsetEstimator(nn.Module):
 
 
 class BidirFlow(nn.Module):
-    def __init__(self, base_channel):
+    def __init__(self, base_channel, fix_warp=False):
         super().__init__()
         self.grid = {}
-        self.bwarp = BackwardWarp()
+        self.bwarp = BackwardWarp(fix_half_pixel=fix_warp)
         self.res0 = ResBlock(base_channel*12, base_channel*4)
         self.res1 = ResBlock(base_channel*12, base_channel*4)
         self.res2 = ResBlock(base_channel*16 + 6, base_channel*4)

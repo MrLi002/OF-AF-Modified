@@ -9,17 +9,19 @@ from tqdm import tqdm
 from torch.utils.data import Dataset
 from util.event import EventSequence
 from util.voxelization import to_voxel_grid
+from util.alignment import natural_sort, validate_interval_file_count
 from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 from lpips import LPIPS
 
 class GOPRO_Train(Dataset):
-    def __init__(self, voxel_bins, data_root, scene, skip_frame):
+    def __init__(self, voxel_bins, data_root, scene, skip_frame, fix_voxel=False):
         self.h, self.w = 720, 1280
         self.crop = [256, 256]
 
         self.skip_frame = skip_frame
         self.cur_skip = skip_frame
         self.voxel_bins = voxel_bins
+        self.fix_voxel = fix_voxel
 
         self.data_root = data_root
         self.scene_root = os.path.join(self.data_root, scene)
@@ -27,11 +29,14 @@ class GOPRO_Train(Dataset):
         self.img_folder = os.path.join(self.scene_root, 'images')
         self.img_names = [f for f in os.listdir(self.img_folder) if f.endswith(".png")]
 
-        self.img_names.sort()
+        self.img_names = natural_sort(self.img_names) if self.fix_voxel else sorted(self.img_names)
 
         self.event_folder = os.path.join(self.scene_root, 'events')
-        self.event_names = os.listdir(self.event_folder)
-        self.event_names.sort()
+        self.event_names = [f for f in os.listdir(self.event_folder) if f.endswith(".npz")]
+        self.event_names = natural_sort(self.event_names) if self.fix_voxel else sorted(self.event_names)
+        if self.fix_voxel:
+            required = validate_interval_file_count(len(self.img_names), len(self.event_names), self.scene_root)
+            self.event_names = self.event_names[:required]
 
     def __len__(self):
         len_nums = len(self.img_names) - self.skip_frame - 1
@@ -44,7 +49,9 @@ class GOPRO_Train(Dataset):
 
     def get_events(self, ind, size):
         events_path = [os.path.join(self.event_folder, i) for i in self.event_names[ind[0]:ind[-1]]]
-        events_01 = EventSequence.from_npz_files(events_path, self.crop[0], self.crop[1], size=size)
+        loader = (EventSequence.from_frame_interval_files if self.fix_voxel
+                  else EventSequence.from_npz_files)
+        events_01 = loader(events_path, self.crop[0], self.crop[1], size=size)
         return events_01
 
     def random_crop(self, imgs):
@@ -63,7 +70,7 @@ class GOPRO_Train(Dataset):
 
         if events_01 is None:
             voxel_01 = torch.zeros([self.voxel_bins, self.crop[0], self.crop[1]])
-        else: 
+        else:
             voxel_01 = to_voxel_grid(events_01, self.voxel_bins)
         imgs = imgs.permute(2, 0, 1)/255
         times = (torch.tensor(ind[1:-1])-ind[0])/(self.cur_skip+1)
@@ -77,13 +84,15 @@ class GOPRO_Train(Dataset):
         return imgs, voxel_01, times
 
 class GOPRO_Test():
-    def __init__(self, voxel_bins, skips=[7, 15], save_root='eval/gopro',save_pred=False):
+    def __init__(self, voxel_bins, skips=[7, 15], save_root='eval/gopro',
+                 save_pred=False, test_root='/DATASSD1/GOPRO/test', fix_voxel=False):
         self.h, self.w = 720, 1280
         self.skips = skips
         self.voxel_bins = voxel_bins
         self.save_root = save_root
         self.save_pred = save_pred
-        self.test_root = '/DATASSD1/GOPRO/test'
+        self.test_root = test_root
+        self.fix_voxel = fix_voxel
         self.all_scenes = ['GOPR0384_11_00', 'GOPR0384_11_05', 'GOPR0385_11_01', 'GOPR0396_11_00', 'GOPR0410_11_00',
                        'GOPR0854_11_00', 'GOPR0862_11_00', 'GOPR0868_11_00', 'GOPR0869_11_00', 'GOPR0871_11_00', 'GOPR0881_11_01']
         self.test_scenes = self.all_scenes
@@ -99,31 +108,46 @@ class GOPRO_Test():
         os.makedirs(self.save_dir, exist_ok=True)
         self.log_path = os.path.join(self.save_dir, 'log.txt')
 
-        self.img_folder = os.path.join(self.test_root, scene, 'imgs')
-        self.img_names = os.listdir(self.img_folder)
-        self.img_names.sort()
+        root = os.path.join(self.test_root, scene)
+        self.interval_layout = os.path.isdir(os.path.join(root, 'images')) and os.path.isdir(os.path.join(root, 'events'))
+        self.img_folder = os.path.join(root, 'images' if self.interval_layout else 'imgs')
+        self.img_names = [f for f in os.listdir(self.img_folder) if f.endswith(".png")]
+        self.img_names = natural_sort(self.img_names) if self.fix_voxel else sorted(self.img_names)
         self.img_paths = [os.path.join(self.img_folder, i) for i in self.img_names]
-        self.event_folder = os.path.join(self.test_root, scene, 'events_clean_8x_v2')
-        self.event_names = os.listdir(self.event_folder)
-        self.event_names.sort()
-        with open(os.path.join(self.test_root, scene, "timestamps_clean_8x_v2.txt"), 'r') as f:
-            self.timestamps = f.read().splitlines()
+        self.event_folder = os.path.join(root, 'events' if self.interval_layout else 'events_clean_8x_v2')
+        self.event_names = [f for f in os.listdir(self.event_folder) if f.endswith(".npz")]
+        self.event_names = natural_sort(self.event_names) if self.fix_voxel else sorted(self.event_names)
+        self.timestamps = None
+        if not self.interval_layout:
+            with open(os.path.join(root, 'timestamps_clean_8x_v2.txt'), 'r') as f:
+                self.timestamps = f.read().splitlines()
+        if self.interval_layout:
+            required = validate_interval_file_count(len(self.img_names), len(self.event_names), root)
+            self.event_names = self.event_names[:required]
+        self.h, self.w = cv2.imread(self.img_paths[0]).shape[:2]
     def get_img(self, index):
         ind = list(range(index, index+self.cur_skip+2))
         imgs = torch.cat([torch.from_numpy(cv2.cvtColor(cv2.imread(os.path.join(self.img_folder, self.img_names[i])), cv2.COLOR_BGR2RGB)) for i in ind], dim=2)
         return imgs, ind
 
     def get_events(self, ind, size=None):
-        start_ind = self.timestamps.index(str(ind[0] / 240))
-        end_ind = self.timestamps.index(str(ind[-1] / 240))
-        events_names = [os.path.join(self.event_folder, i) for i in self.event_names[start_ind:end_ind]]
-        events_01 = EventSequence.from_npz_files(events_names, self.h, self.w, size=size)
+        if self.interval_layout:
+            events_names = [os.path.join(self.event_folder, i) for i in self.event_names[ind[0]:ind[-1]]]
+            loader = (EventSequence.from_frame_interval_files if self.fix_voxel
+                      else EventSequence.from_npz_files)
+        else:
+            start_ind = self.timestamps.index(str(ind[0] / 240))
+            end_ind = self.timestamps.index(str(ind[-1] / 240))
+            events_names = [os.path.join(self.event_folder, i) for i in self.event_names[start_ind:end_ind]]
+            loader = EventSequence.from_npz_files
+        events_01 = loader(events_names, self.h, self.w, size=size)
         return events_01
 
     def get_batch(self, index):
         imgs, ind = self.get_img(index)
         events_01 = self.get_events(ind)
-        voxel_01 = to_voxel_grid(events_01, self.voxel_bins)
+        voxel_01 = (to_voxel_grid(events_01, self.voxel_bins) if events_01 is not None
+                    else torch.zeros(self.voxel_bins, self.h, self.w))
         imgs = imgs.permute(2, 0, 1)/255
         times = (torch.tensor(ind[1:-1])-ind[0])/(self.cur_skip+1)
 

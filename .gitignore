@@ -25,3 +25,5 @@ outputs/
 # Secrets
 .env
 *.key
+# Optional external FloLPIPS dependency; see FIXES.md for weight provenance.
+!flolpipsloss/weights/v0.1/alex.pth

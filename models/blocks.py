@@ -56,10 +56,17 @@ class ResBlockIF(nn.Module):
         return x_res1
 
 
+def splat_valid_mask(occupancy, min_weight=0.5):
+    """Detached mask: reject pixels where average splatting is ill-conditioned."""
+    with torch.no_grad():
+        return (occupancy >= min_weight).to(dtype=occupancy.dtype)
+
+
 class BackwardWarp(nn.Module):
-    def __init__(self):
+    def __init__(self, fix_half_pixel=False):
         super().__init__()
         self.grid = {}
+        self.fix_half_pixel = fix_half_pixel
 
     def forward(self, img, flow):
         N, _, H, W = img.size()
@@ -80,14 +87,27 @@ class BackwardWarp(nn.Module):
         x = gridX + u
         y = gridY + v
         # range -1 to 1
-        x = 2 * (x / W - 0.5)
-        y = 2 * (y / H - 0.5)
+        if self.fix_half_pixel:
+            # Pixel centers for grid_sample(..., align_corners=False).
+            x = 2 * ((x + 0.5) / W) - 1
+            y = 2 * ((y + 0.5) / H) - 1
+        else:
+            # Preserved exactly for released checkpoints.
+            x = 2 * (x / W - 0.5)
+            y = 2 * (y / H - 0.5)
         # stacking X and Y
         grid = torch.stack((x, y), dim=3)
         # Sample pixels using bilinear interpolation.
         imgOut = torch.nn.functional.grid_sample(img, grid, align_corners=False)
 
         return imgOut
+
+
+def conv(ch_in, ch_out, isReLU=True):
+    layers = [nn.Conv2d(ch_in, ch_out, 3, padding=1)]
+    if isReLU:
+        layers.append(nn.LeakyReLU(0.2, inplace=True))
+    return nn.Sequential(*layers)
 
 
 class DenseBlock(nn.Module):
