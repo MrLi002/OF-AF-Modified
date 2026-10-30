@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Python environments
+.venv/
+venv/
+env/
+
+# Datasets
+datasets/
+data/
+
+# Training results
+runs/
+checkpoints/
+logs/
+outputs/
+
+# Model weights
+*.pth
+*.pt
+*.ckpt
+
+# Secrets
+.env
+*.key
