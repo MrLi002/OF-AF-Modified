@@ -70,9 +70,8 @@ class GOPRO_Train(Dataset):
 
         if events_01 is None:
             voxel_01 = torch.zeros([self.voxel_bins, self.crop[0], self.crop[1]])
-        else: 
-            voxel_01 = (to_voxel_grid(events_01, self.voxel_bins) if events_01 is not None
-                    else torch.zeros(self.voxel_bins, self.h, self.w))
+        else:
+            voxel_01 = to_voxel_grid(events_01, self.voxel_bins)
         imgs = imgs.permute(2, 0, 1)/255
         times = (torch.tensor(ind[1:-1])-ind[0])/(self.cur_skip+1)
         
@@ -146,7 +145,8 @@ class GOPRO_Test():
     def get_batch(self, index):
         imgs, ind = self.get_img(index)
         events_01 = self.get_events(ind)
-        voxel_01 = to_voxel_grid(events_01, self.voxel_bins)
+        voxel_01 = (to_voxel_grid(events_01, self.voxel_bins) if events_01 is not None
+                    else torch.zeros(self.voxel_bins, self.h, self.w))
         imgs = imgs.permute(2, 0, 1)/255
         times = (torch.tensor(ind[1:-1])-ind[0])/(self.cur_skip+1)
 
