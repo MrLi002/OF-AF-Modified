@@ -78,6 +78,12 @@ def load_events(file, hsergb=False, bsergb=False, hqf=False, size=None):
             tmp["t"].astype(np.float64).reshape((-1,)),
             tmp["p"].astype(np.float32).reshape((-1,))
         )
+        # V2E files can encode polarity as {0,1} rather than {-1,+1}.
+        # Convert only when a zero is present; signed {-1,+1} remains unchanged.
+        if np.any(polarity == 0) and np.all(np.isin(polarity, (0, 1))):
+            polarity = polarity * 2 - 1
+        if polarity.size and not np.all(np.isin(polarity, (-1, 1))):
+            raise ValueError(f"Unsupported polarity values in {file}")
     events = np.stack((x, y, timestamp, polarity), axis=-1)
 
     # [g, k, g_h, k_w]
@@ -528,6 +534,38 @@ class EventSequence(object):
         )
         filenames = [filename for filename in filename_iterator]
         return cls.from_npz_files(filenames, image_height, image_width)
+
+    @classmethod
+    def from_frame_interval_files(cls, list_of_filenames, image_height, image_width,
+                                  bsergb=False, size=None):
+        """Approximate event/frame alignment when file k represents frame k->k+1.
+
+        Each file is assigned one equal frame interval. Within-file timestamps
+        are normalized using the first/last *observed* events, not measured
+        frame exposure boundaries. This is an approximation: prefer explicit
+        synchronized frame timestamps where available.
+        """
+        n_intervals = len(list_of_filenames)
+        if n_intervals == 0:
+            return None
+        features_list = []
+        for k, filename in enumerate(list_of_filenames):
+            features = load_events(filename, bsergb=bsergb, size=size)
+            if len(features) == 0:
+                continue
+            timestamp = features[:, TIMESTAMP_COLUMN]
+            t_min, t_max = float(timestamp.min()), float(timestamp.max())
+            if t_max > t_min:
+                local = (timestamp - t_min) / (t_max - t_min)
+            else:
+                local = np.full_like(timestamp, 0.5)
+            features[:, TIMESTAMP_COLUMN] = k + np.clip(local, 0, 1 - 1e-6)
+            features_list.append(features)
+        if not features_list:
+            return None
+        features = np.concatenate(features_list, axis=0)
+        return cls(features, image_height, image_width,
+                   start_time=0.0, end_time=float(n_intervals))
 
     @classmethod
     def from_npz_files(cls, list_of_filenames, image_height, image_width, start_time=None, end_time=None, hsergb=False, bsergb=False, hqf=False, size=None):

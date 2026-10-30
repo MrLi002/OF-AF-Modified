@@ -8,15 +8,18 @@ from torch.utils.data import Dataset
 from torch.nn import functional as F
 from util.event import EventSequence
 from util.voxelization import to_voxel_grid
+from util.alignment import natural_sort
 from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 from lpips import LPIPS
 
 class BSERGB_Train(Dataset):
-    def __init__(self, voxel_bins, data_root, scene, skip_frame):
+    def __init__(self, voxel_bins, data_root, scene, skip_frame, fix_voxel=False):
         self.skip_frame = skip_frame
         self.cur_skip = skip_frame
         self.crop = [256, 256]
         self.voxel_bins = voxel_bins
+        self.fix_voxel = fix_voxel
+        self.scene = scene
 
         self.data_root = data_root
         self.scene_root = os.path.join(self.data_root, scene)
@@ -24,16 +27,27 @@ class BSERGB_Train(Dataset):
         self.img_folder = os.path.join(self.scene_root, 'images')
         self.img_names = [f for f in os.listdir(self.img_folder) if f.endswith(".png")]
 
-        self.img_names.sort()
+        self.img_names = natural_sort(self.img_names) if self.fix_voxel else sorted(self.img_names)
         self.h, self.w, _ = cv2.imread(os.path.join(self.img_folder, self.img_names[0])).shape
 
         self.event_folder = os.path.join(self.scene_root, 'events')
-        self.event_names = os.listdir(self.event_folder)
-        self.event_names.sort()
+        self.event_names = [f for f in os.listdir(self.event_folder) if f.endswith(".npz")]
+        self.event_names = natural_sort(self.event_names) if self.fix_voxel else sorted(self.event_names)
+        if self.fix_voxel and len(self.event_names) != len(self.img_names) - 1:
+            raise ValueError(f"{self.scene_root}: expected images-1 interval files")
+        bad_indices = {
+            'basket_09': [31, 32, 33, 34],
+            'may29_rooftop_handheld_02': [17, 70],
+            'may29_rooftop_handheld_03': [306],
+            'may29_rooftop_handheld_05': [21],
+        }.get(scene, [])
+        self.valid_indices = [
+            k for k in range(max(0, len(self.img_names) - self.skip_frame - 1))
+            if not any(k <= bad < k + self.skip_frame + 2 for bad in bad_indices)
+        ]
 
     def __len__(self):
-        len_nums = len(self.img_names) - self.skip_frame - 1
-        return len_nums
+        return len(self.valid_indices)
 
     def get_img(self, index):
         ind = list(range(index, index+self.cur_skip+2))
@@ -42,7 +56,9 @@ class BSERGB_Train(Dataset):
 
     def get_events(self, ind, size):
         events_path = [os.path.join(self.event_folder, i) for i in self.event_names[ind[0]:ind[-1]]]
-        events_01 = EventSequence.from_npz_files(events_path, self.crop[0], self.crop[1], bsergb=True, size=size)
+        loader = (EventSequence.from_frame_interval_files if self.fix_voxel
+                  else EventSequence.from_npz_files)
+        events_01 = loader(events_path, self.crop[0], self.crop[1], bsergb=True, size=size)
         return events_01
 
     def random_crop(self, imgs):
@@ -55,6 +71,7 @@ class BSERGB_Train(Dataset):
         return imgs, [hs, ws, he, we]
 
     def __getitem__(self, index):
+        index = self.valid_indices[index]
         imgs, ind = self.get_img(index)
         imgs, size = self.random_crop(imgs)
         events_01 = self.get_events(ind, size)

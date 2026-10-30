@@ -49,6 +49,8 @@ def to_voxel_grid(event_sequence, nb_of_time_bins=5, remapping_maps=None):
     # voxel_grid_flat = voxel_grid.flatten()
     # 将时间戳转换为[0，nb_of_time_bins]范围。
     duration = event_sequence.duration()
+    if duration <= 0:
+        return voxel_grid
     start_timestamp = event_sequence.start_time()
     features = torch.from_numpy(event_sequence._features)
     x = features[:, event.X_COLUMN]

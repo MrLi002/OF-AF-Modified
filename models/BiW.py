@@ -21,16 +21,16 @@ class RefBlock(nn.Module):
 
 
 class MaskGuideNet(nn.Module):
-    def __init__(self, base_channel):
+    def __init__(self, base_channel, fix_warp=False):
         super().__init__()
-        self.bwarp = BackwardWarp()
+        self.bwarp = BackwardWarp(fix_half_pixel=fix_warp)
         self.refblock0 = RefBlock(base_channel)
         self.refblock1 = RefBlock(base_channel)
         self.res0 = ResBlock(base_channel*8+3, base_channel*4)
         self.conv0 = nn.Conv2d(3+3+1, base_channel*4, 3, 1, 1)
         self.conv1 = nn.Conv2d(base_channel*8, 3, 3, 1, 1)
 
-    def forward(self, im0, im1, flow0t, flowt0, ctxt0, ctxt1):
+    def forward(self, im0, im1, flow0t, flowt0, ctxt0, ctxt1, return_aux=False):
         b, _, h, w = flow0t.shape
         ones = torch.ones((b, 1, h, w), device=im0.device, dtype=im0.dtype)
 
@@ -58,21 +58,34 @@ class MaskGuideNet(nn.Module):
         Ref_source = self.conv0(torch.cat([imt0*Mask0t, imt0, Mask0t], dim=1))
 
         imt0 = imt0 + self.conv1(torch.cat([Ref, Ref_source], dim=1))
+        if return_aux:
+            # A detached occupancy mask gates the reconstruction loss;
+            # the gradient reaches flow0t through im0t, not the mask.
+            full_ones = torch.ones_like(im0[:, :1])
+            valid = (softsplat(full_ones, Flow0t, tenMetric=None, strMode="sum") > 1e-6).to(im0.dtype).detach()
+            return imt0, im0t, Mask0t, valid
         return imt0, im0t, Mask0t
 
 
 class BiW(nn.Module):
-    def __init__(self, base_channel):
+    def __init__(self, base_channel, fix_warp=False):
         super().__init__()
-        self.fuse_warp = MaskGuideNet(base_channel)
+        self.fuse_warp = MaskGuideNet(base_channel, fix_warp=fix_warp)
         self.channel_squeeze0 = nn.Conv2d(128, 32, 1, 1, 0, bias=True)
         self.channel_squeeze1 = nn.Conv2d(128, 32, 1, 1, 0, bias=True)
         self.refine_blocks = ResBlockIF(3+128, 64)
         self.conv_out = nn.Conv2d(64, 3, 1, 1, bias=True)
 
-    def forward(self, im0, im1, t, flow0t, flow1t, flowt0, flowt1, ctxt0, ctxt1, if0_1, if1_1):
-        imt0, im0t, mask0t = self.fuse_warp(im0, im1, flow0t, flowt0, ctxt0, ctxt1)
-        imt1, im1t, mask1t = self.fuse_warp(im1, im0, flow1t, flowt1, ctxt1, ctxt0)
+    def forward(self, im0, im1, t, flow0t, flow1t, flowt0, flowt1, ctxt0, ctxt1, if0_1, if1_1,
+                return_aux=False):
+        out0 = self.fuse_warp(im0, im1, flow0t, flowt0, ctxt0, ctxt1, return_aux=return_aux)
+        out1 = self.fuse_warp(im1, im0, flow1t, flowt1, ctxt1, ctxt0, return_aux=return_aux)
+        if return_aux:
+            imt0, im0t, mask0t, valid0 = out0
+            imt1, im1t, mask1t, valid1 = out1
+        else:
+            imt0, im0t, mask0t = out0
+            imt1, im1t, mask1t = out1
         mask = torch.softmax(torch.cat([(1 - mask0t)*(1 - t), (1 - mask1t)*t], 1), 1)[:, :1]  # (B,1,H,W)
         fuse_out = imt0*mask+(1-mask)*imt1
 
@@ -81,4 +94,6 @@ class BiW(nn.Module):
         forard_feat_hd, backward_feat_hd = F.interpolate(forard_feat_ld, scale_factor=4, mode='bilinear'), F.interpolate(backward_feat_ld, scale_factor=4, mode='bilinear')
         refine_in = torch.cat((forard_feat_hd, backward_feat_hd, fuse_out, if0_1, if1_1), 1)
         refine_out = self.conv_out(self.refine_blocks(refine_in))+fuse_out
+        if return_aux:
+            return refine_out, im0t, im1t, valid0, valid1
         return refine_out

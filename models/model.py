@@ -12,16 +12,18 @@ class MyModel(nn.Module):
 		self.base_channel = 32
 		self.voxel_bins = args.voxel_bins
 		self.nb_of_flow = args.nb_of_flow
+		self.fix_query = getattr(args, "fix_query", False)
+		self.fix_warp = getattr(args, "fix_warp", False)
 		self.bins_per_flow = self.voxel_bins//self.nb_of_flow
 
 		self.events_encoder = EventsEncoder(self.voxel_bins, self.base_channel, bins_per_flow=self.bins_per_flow)
 		self.im_encoder = ImageEncoder(3, self.base_channel)
-		self.bidir_flow0 = BidirFlow(self.base_channel)
-		self.bidir_flow1 = BidirFlow(self.base_channel)
-		self.query = Query(self.base_channel)
-		self.biw = BiW(self.base_channel)
+		self.bidir_flow0 = BidirFlow(self.base_channel, fix_warp=self.fix_warp)
+		self.bidir_flow1 = BidirFlow(self.base_channel, fix_warp=self.fix_warp)
+		self.query = Query(self.base_channel, fix_query=self.fix_query)
+		self.biw = BiW(self.base_channel, fix_warp=self.fix_warp)
 
-	def forward(self, im0, im1, event, interp_times):
+	def forward(self, im0, im1, event, interp_times, return_aux=False):
 		efs01 = self.events_encoder(im0, im1, event)
 		if0_1, if0_4 = self.im_encoder(im0)
 		if1_1, if1_4 = self.im_encoder(im1)
@@ -51,33 +53,52 @@ class MyModel(nn.Module):
 			flowst1 =[0→1,1/16→1,2/16→1,3/16→1,...15/16→1,1→1]
 			'''
 
-		imst = []
-		for i in range(len(interp_times[0])):
-			t = interp_times[0, i]
-			index = t * self.nb_of_flow
-			int_ = index.floor().long()
-			pct_ = index - int_
+		# All lists are ordered by physical time: node k corresponds to k / nb_of_flow.
+		# Keep legacy interpolation as the default for published checkpoints.
+		imst, fwd0_list, fwd1_list, valid0_list, valid1_list = [], [], [], [], []
+		if interp_times.ndim != 2 or interp_times.shape[0] != b:
+			raise ValueError("interp_times must be [B, query_count]")
+		for i in range(interp_times.shape[1]):
+			time_batch = interp_times[:, i].to(dtype=im0.dtype)
+			if bool(((time_batch <= 0) | (time_batch >= 1)).any()):
+				raise ValueError("interp_times must be strictly within (0, 1)")
+			index = time_batch * self.nb_of_flow
+			low = index.floor().long().clamp(max=self.nb_of_flow - 1)
+			pct = (index - low).view(b, 1, 1, 1)
+			t = time_batch.view(b, 1, 1, 1)
 
-			flow0t = flows0t[int_]*(1-pct_) + flows0t[int_+1]*pct_
-			flow1t = flows1t[int_+1]*(1-pct_) + flows1t[int_]*pct_
-			flowt0, ctxt0 = self.query(if0_4, flowst0[int_], flowst0[int_+1], ctxst0[int_], ctxst0[int_+1], pct_)
-			flowt1, ctxt1 = self.query(if1_4, flowst1[int_], flowst1[int_+1], ctxst1[int_], ctxst1[int_+1], pct_)
-			# imt = self.biw(im0, im1, t, flow0t, flow1t, flowt0, flowt1, ctxt0, ctxt1, if0_1, if1_1)
+			def pick(items, indices):
+				# Avoid stacking all context features (especially costly on high-res images).
+				return torch.cat([items[int(k)][j:j + 1] for j, k in enumerate(indices.tolist())], dim=0)
 
-			if self.training:
-				imt = checkpoint(
-					self.biw,
-					im0, im1, t,
-					flow0t, flow1t, flowt0, flowt1,
-					ctxt0, ctxt1, if0_1, if1_1,
-					use_reentrant=False
-				)
+			flow0t = pick(flows0t, low) * (1 - pct) + pick(flows0t, low + 1) * pct
+			if self.fix_query:
+				flow1t = pick(flows1t, low) * (1 - pct) + pick(flows1t, low + 1) * pct
 			else:
-				imt = self.biw(
-					im0, im1, t,
-					flow0t, flow1t, flowt0, flowt1,
-					ctxt0, ctxt1, if0_1, if1_1
-				)
+				flow1t = pick(flows1t, low + 1) * (1 - pct) + pick(flows1t, low) * pct
 
+			flowt0, ctxt0 = self.query(if0_4, pick(flowst0, low), pick(flowst0, low + 1),
+										pick(ctxst0, low), pick(ctxst0, low + 1), pct)
+			flowt1, ctxt1 = self.query(if1_4, pick(flowst1, low), pick(flowst1, low + 1),
+										pick(ctxst1, low), pick(ctxst1, low + 1), pct)
+
+			args = (im0, im1, t, flow0t, flow1t, flowt0, flowt1, ctxt0, ctxt1, if0_1, if1_1)
+			if self.training:
+				output = checkpoint(self.biw, *args, use_reentrant=False, return_aux=return_aux)
+			else:
+				output = self.biw(*args, return_aux=return_aux)
+			if return_aux:
+				imt, fwd0, fwd1, valid0, valid1 = output
+				fwd0_list.append(fwd0)
+				fwd1_list.append(fwd1)
+				valid0_list.append(valid0)
+				valid1_list.append(valid1)
+			else:
+				imt = output
 			imst.append(imt)
-		return torch.stack(imst, 1)
+
+		preds = torch.stack(imst, dim=1)
+		if return_aux:
+			return (preds, torch.stack(fwd0_list, dim=1), torch.stack(fwd1_list, dim=1),
+					torch.stack(valid0_list, dim=1), torch.stack(valid1_list, dim=1))
+		return preds
