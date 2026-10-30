@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 from torch.nn import functional as F
 from util.event import EventSequence
 from util.voxelization import to_voxel_grid
-from util.alignment import natural_sort
+from util.alignment import natural_sort, validate_interval_file_count
 from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 from lpips import LPIPS
 
@@ -33,8 +33,9 @@ class BSERGB_Train(Dataset):
         self.event_folder = os.path.join(self.scene_root, 'events')
         self.event_names = [f for f in os.listdir(self.event_folder) if f.endswith(".npz")]
         self.event_names = natural_sort(self.event_names) if self.fix_voxel else sorted(self.event_names)
-        if self.fix_voxel and len(self.event_names) != len(self.img_names) - 1:
-            raise ValueError(f"{self.scene_root}: expected images-1 interval files")
+        if self.fix_voxel:
+            required = validate_interval_file_count(len(self.img_names), len(self.event_names), self.scene_root)
+            self.event_names = self.event_names[:required]
         bad_indices = {
             'basket_09': [31, 32, 33, 34],
             'may29_rooftop_handheld_02': [17, 70],

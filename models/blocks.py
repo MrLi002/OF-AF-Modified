@@ -56,6 +56,12 @@ class ResBlockIF(nn.Module):
         return x_res1
 
 
+def splat_valid_mask(occupancy, min_weight=0.5):
+    """Detached mask: reject pixels where average splatting is ill-conditioned."""
+    with torch.no_grad():
+        return (occupancy >= min_weight).to(dtype=occupancy.dtype)
+
+
 class BackwardWarp(nn.Module):
     def __init__(self, fix_half_pixel=False):
         super().__init__()

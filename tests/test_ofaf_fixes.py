@@ -4,7 +4,10 @@ import torch
 from models.BiFEB import Query
 from models.blocks import BackwardWarp
 from util.event import load_events, EventSequence
-from util.alignment import natural_sort
+from util.alignment import natural_sort, validate_interval_file_count
+from models.blocks import splat_valid_mask
+from check_ckpt import analyze_adam_moments
+import pytest
 from util.voxelization import to_voxel_grid
 
 
@@ -66,3 +69,58 @@ def test_empty_interval(tmp_path):
     np.savez(path, x=np.array([]), y=np.array([]),
              t=np.array([]), p=np.array([]))
     assert EventSequence.from_frame_interval_files([str(path)], 4, 4) is None
+
+
+def test_crop_time_normalization_uses_full_file_timestamps(tmp_path):
+    # The crop contains only events at 40% and 60% of the full interval.
+    # An incorrect crop-first implementation would map them to 0% and 100%.
+    path = tmp_path / "frame_interval.npz"
+    np.savez(path,
+             x=np.array([8, 1, 1, 8]),
+             y=np.array([8, 1, 1, 8]),
+             t=np.array([0.0, 40.0, 60.0, 100.0]),
+             p=np.array([1, -1, 1, 1]))
+    seq = EventSequence.from_frame_interval_files([str(path)], 4, 4,
+                                                   size=[0, 0, 4, 4])
+    assert seq is not None
+    assert np.allclose(seq._features[:, 2], [0.4, 0.6])
+    assert np.allclose(seq._features[:, :2], [[1, 1], [1, 1]])
+
+
+def test_extra_trailing_events_allowed_and_missing_rejected():
+    assert validate_interval_file_count(4, 3, "scene") == 3
+    with pytest.warns(UserWarning, match="extra trailing"):
+        assert validate_interval_file_count(4, 4, "scene") == 3
+    with pytest.raises(ValueError, match="need at least images - 1"):
+        validate_interval_file_count(4, 2, "scene")
+
+
+def test_splat_valid_mask_has_safe_threshold_and_no_grad():
+    occupancy = torch.tensor([0.0, 1e-4, 0.49, 0.5, 1.0],
+                             requires_grad=True)
+    mask = splat_valid_mask(occupancy)
+    assert mask.tolist() == [0, 0, 0, 1, 1]
+    assert not mask.requires_grad
+
+
+def test_check_ckpt_moment_ratio():
+    named = [
+        ("bidir_flow0.gru.convz1.weight", torch.nn.Parameter(torch.zeros(1))),
+        ("bidir_flow1.flow.0.weight", torch.nn.Parameter(torch.zeros(1))),
+        ("events_encoder.ct", torch.nn.Parameter(torch.zeros(1))),
+        ("biw.conv_out.weight", torch.nn.Parameter(torch.zeros(1))),
+    ]
+    optimizer = {
+        "param_groups": [{"params": [0, 1, 2, 3]}],
+        "state": {
+            0: {"exp_avg": torch.tensor([0.01])},
+            1: {"exp_avg": torch.tensor([0.01])},
+            2: {"exp_avg": torch.tensor([1.0])},
+            3: {"exp_avg": torch.tensor([1.0])},
+        }
+    }
+    rows, forward_median, reference_median, ratio = analyze_adam_moments(named, optimizer)
+    assert len(rows) == 4
+    assert abs(forward_median - 0.01) < 1e-6
+    assert reference_median == 1.0
+    assert abs(ratio - 0.01) < 1e-6

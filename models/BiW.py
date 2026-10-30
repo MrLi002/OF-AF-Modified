@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from .blocks import ResBlock, ResBlockIF, BackwardWarp
+from .blocks import ResBlock, ResBlockIF, BackwardWarp, splat_valid_mask
 from .softsplat import softsplat
 
 class RefBlock(nn.Module):
@@ -61,8 +61,13 @@ class MaskGuideNet(nn.Module):
         if return_aux:
             # A detached occupancy mask gates the reconstruction loss;
             # the gradient reaches flow0t through im0t, not the mask.
-            full_ones = torch.ones_like(im0[:, :1])
-            valid = (softsplat(full_ones, Flow0t, tenMetric=None, strMode="sum") > 1e-6).to(im0.dtype).detach()
+            # Exclude low-occupancy pixels from the auxiliary average-splat loss:
+            # division by an extremely small splat weight amplifies flow gradients.
+            # Mask creation itself must not create a backward graph.
+            with torch.no_grad():
+                full_ones = torch.ones_like(im0[:, :1])
+                occupancy = softsplat(full_ones, Flow0t, tenMetric=None, strMode="sum")
+                valid = splat_valid_mask(occupancy, min_weight=0.5)
             return imt0, im0t, Mask0t, valid
         return imt0, im0t, Mask0t
 

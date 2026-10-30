@@ -21,13 +21,18 @@ def inspect_scene(scene, bsergb=False, skip=31, bins=128):
     bad = []
     if len(images) < skip + 2:
         bad.append(f"not enough images for skip={skip}")
-    if len(events) != len(images) - 1:
-        bad.append(f"expected images - 1 events files; got {len(events)} vs {len(images)} images")
+    required = max(0, len(images) - 1)
+    if len(events) < required:
+        bad.append(f"need at least images - 1 event files; got {len(events)} vs {len(images)} images")
+    elif len(events) > required:
+        print(f"[warn] {len(events) - required} extra trailing event file(s) ignored "
+              "(verify first-file index before training)")
     lexical = sorted(p.name for p in events)
     numeric = natural_sort([p.name for p in events])
     if lexical != numeric:
         bad.append("event names are not zero-padded: lexicographic order differs from numeric order")
-    events = [scene / "events" / name for name in numeric]
+    # Trailing files after the final image are not consumed by the loader.
+    events = [scene / "events" / name for name in numeric[:required]]
     time_key = "timestamp" if bsergb else "t"
     pol_key = "polarity" if bsergb else "p"
     bounds = []

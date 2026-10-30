@@ -550,11 +550,26 @@ class EventSequence(object):
             return None
         features_list = []
         for k, filename in enumerate(list_of_filenames):
-            features = load_events(filename, bsergb=bsergb, size=size)
+            # Determine the interval's time range BEFORE cropping the events.
+            # Otherwise a short active part of a crop may be incorrectly stretched
+            # to cover the entire inter-frame interval.
+            features = load_events(filename, bsergb=bsergb, size=None)
             if len(features) == 0:
                 continue
             timestamp = features[:, TIMESTAMP_COLUMN]
             t_min, t_max = float(timestamp.min()), float(timestamp.max())
+            if size is not None:
+                hs, ws, he, we = size
+                inside = ((features[:, X_COLUMN] >= ws) & (features[:, X_COLUMN] < we)
+                          & (features[:, Y_COLUMN] >= hs) & (features[:, Y_COLUMN] < he))
+                features = features[inside].copy()
+                if len(features) == 0:
+                    continue
+                features[:, X_COLUMN] -= ws
+                features[:, Y_COLUMN] -= hs
+            # The observed full-file endpoints remain an approximation of
+            # physical frame exposure boundaries. Preserve that limitation.
+            timestamp = features[:, TIMESTAMP_COLUMN]
             if t_max > t_min:
                 local = (timestamp - t_min) / (t_max - t_min)
             else:

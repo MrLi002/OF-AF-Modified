@@ -28,9 +28,9 @@ Read [check_events.py](check_events.py) before training on locally generated V2E
 ### About event/frame synchronization
 
 The input layout `images/*.png` + `events/*.npz` is assumed to contain one event
-file for each adjacent pair of video frames, in matching order. `--fix_voxel`
+file for each adjacent pair of video frames, in matching order. Extra\ntrailing event files are ignored with a warning; too few files are an error. `--fix_voxel`
 maps file k to physical interval k/(skip+1)..(k+1)/(skip+1), but it estimates the
-intra-file event positions using observed min/max event timestamps. It **cannot**
+intra-file event positions using **full-file** observed min/max event timestamps before spatial cropping. It **cannot**
 recover exact frame boundaries in sparse/eventless windows. Thus it is an
 **approximation**, not a guaranteed timestamp synchronization solution.
 For reproducibility, record real frame timestamps and event clock units when

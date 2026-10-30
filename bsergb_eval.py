@@ -13,7 +13,7 @@ from flolpipsloss.flolpips import Flolpips
 from models.model import MyModel
 from util.event import EventSequence
 from util.voxelization import to_voxel_grid
-from util.alignment import natural_sort
+from util.alignment import natural_sort, validate_interval_file_count
 from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 
 class BSERGB_Test():
@@ -61,8 +61,9 @@ class BSERGB_Test():
         self.event_folder = os.path.join(self.test_root, scene, 'events')
         self.event_names = [f for f in os.listdir(self.event_folder) if f.endswith(".npz")]
         self.event_names = natural_sort(self.event_names) if self.fix_voxel else sorted(self.event_names)
-        if self.fix_voxel and len(self.event_names) != len(self.img_names) - 1:
-            raise ValueError(f"{scene}: expected images-1 event interval files")
+        if self.fix_voxel:
+            required = validate_interval_file_count(len(self.img_names), len(self.event_names), scene)
+            self.event_names = self.event_names[:required]
 
         self.cur_skip_inds = []
         if scene in self.skip_inds:

@@ -9,7 +9,7 @@ from tqdm import tqdm
 from torch.utils.data import Dataset
 from util.event import EventSequence
 from util.voxelization import to_voxel_grid
-from util.alignment import natural_sort
+from util.alignment import natural_sort, validate_interval_file_count
 from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 from lpips import LPIPS
 
@@ -34,9 +34,9 @@ class GOPRO_Train(Dataset):
         self.event_folder = os.path.join(self.scene_root, 'events')
         self.event_names = [f for f in os.listdir(self.event_folder) if f.endswith(".npz")]
         self.event_names = natural_sort(self.event_names) if self.fix_voxel else sorted(self.event_names)
-        if self.fix_voxel and len(self.event_names) != len(self.img_names) - 1:
-            raise ValueError(f"{self.scene_root}: expected images-1 interval files; got "
-                             f"{len(self.event_names)} files for {len(self.img_names)} images")
+        if self.fix_voxel:
+            required = validate_interval_file_count(len(self.img_names), len(self.event_names), self.scene_root)
+            self.event_names = self.event_names[:required]
 
     def __len__(self):
         len_nums = len(self.img_names) - self.skip_frame - 1
@@ -121,8 +121,9 @@ class GOPRO_Test():
         if not self.interval_layout:
             with open(os.path.join(root, 'timestamps_clean_8x_v2.txt'), 'r') as f:
                 self.timestamps = f.read().splitlines()
-        if self.interval_layout and len(self.event_names) != len(self.img_names) - 1:
-            raise ValueError(f"Bad interval layout for {scene}: expected images-1 event files")
+        if self.interval_layout:
+            required = validate_interval_file_count(len(self.img_names), len(self.event_names), root)
+            self.event_names = self.event_names[:required]
         self.h, self.w = cv2.imread(self.img_paths[0]).shape[:2]
     def get_img(self, index):
         ind = list(range(index, index+self.cur_skip+2))
