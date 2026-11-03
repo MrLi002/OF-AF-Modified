@@ -11,6 +11,7 @@ from torch.nn import functional as F
 from lpips import LPIPS
 from flolpipsloss.flolpips import Flolpips
 from models.model import MyModel
+from models.model_traj import DACTModel
 from util.event import EventSequence
 from util.voxelization import to_voxel_grid
 from util.alignment import natural_sort, validate_interval_file_count
@@ -97,8 +98,8 @@ class BSERGB_Test():
 
     def pad(self, tensor):
         b, c, h, w = tensor.shape
-        h_pad = (4 - h % 4) % 4
-        w_pad = (4 - w % 4) % 4
+        h_pad = (8 - h % 8) % 8
+        w_pad = (8 - w % 8) % 8
         tensor_pad = F.pad(tensor, [0, w_pad, 0, h_pad], mode="constant", value=0)
         return tensor_pad
 
@@ -209,10 +210,19 @@ if __name__ == '__main__':
     parser.add_argument('--skip_flolpips', action='store_true',
                         help='Run PSNR/SSIM/LPIPS without external FloLPIPS weights')
     parser.add_argument('--allow_config_mismatch', action='store_true')
+    parser.add_argument('--flow_mode', choices=['bifeb', 'traj'], default='bifeb')
+    parser.add_argument('--traj_degree', type=int, default=4)
+    parser.add_argument('--traj_iters', type=int, default=6)
+    parser.add_argument('--traj_reversal', choices=['fixed_point', 'splat'], default='fixed_point')
+    parser.add_argument('--corr_impl', choices=['full', 'alt'], default='alt')
+    parser.add_argument('--traj_iters_eval', type=int, default=None)
+    parser.add_argument('--fix_mask_grad', action='store_true')
     args = parser.parse_args()
 
-    model = MyModel(args)
-    state = torch.load(args.checkpoint, map_location='cpu')
+    state = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
+    for k, v in state.get('model_config', {}).items():
+        setattr(args, k, v)
+    model = DACTModel(args) if args.flow_mode == 'traj' else MyModel(args)
     flags = state.get("preprocessing_flags")
     current = {k: bool(getattr(args, k)) for k in ("fix_query", "fix_warp", "fix_voxel")}
     if flags is not None and any(flags.get(k) != value for k, value in current.items()):
@@ -226,6 +236,8 @@ if __name__ == '__main__':
     new_state_dict = {k.replace('module.', ''): v for k, v in cpk.items()}
     model.load_state_dict(new_state_dict)
     model.cuda()
+    if args.flow_mode == 'traj' and args.traj_iters_eval is not None:
+        model.traj.iters = args.traj_iters_eval
 
     print(f'Loaded checkpoint from {args.checkpoint}')
     save_root = "eval/bsergb"

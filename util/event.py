@@ -59,7 +59,7 @@ def load_events(file, hsergb=False, bsergb=False, hqf=False, size=None):
         (x, y, timestamp, polarity) = (
             tmp["x"].astype(np.float32).reshape((-1,)),
             tmp["y"].astype(np.float32).reshape((-1,)),
-            tmp["timestamp"].astype(np.float32).reshape((-1,)),
+            tmp["timestamp"].astype(np.float64).reshape((-1,)),
             tmp["polarity"].astype(np.float32).reshape((-1,)) * 2 - 1,  # to convert from 0,1 to 1,-1 polarity
         )
         x = (2 * 970 * x) // 62000  # Since the authors did not provided necessary information about scaling these numbers are carefully detemined by others.

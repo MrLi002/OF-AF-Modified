@@ -21,8 +21,9 @@ class RefBlock(nn.Module):
 
 
 class MaskGuideNet(nn.Module):
-    def __init__(self, base_channel, fix_warp=False):
+    def __init__(self, base_channel, fix_warp=False, fix_mask_grad=False):
         super().__init__()
+        self.fix_mask_grad = fix_mask_grad
         self.bwarp = BackwardWarp(fix_half_pixel=fix_warp)
         self.refblock0 = RefBlock(base_channel)
         self.refblock1 = RefBlock(base_channel)
@@ -41,7 +42,8 @@ class MaskGuideNet(nn.Module):
         imt0 = self.bwarp(im0, Flowt0)
 
         #get mask
-        warp_mask = softsplat(ones, flow0t, tenMetric=None, strMode="avg")
+        warp_mask = softsplat(ones, flow0t.detach() if self.fix_mask_grad else flow0t,
+                              tenMetric=None, strMode="avg")
         diff_map = torch.sum(torch.abs(imt0 - im0t), dim=1, keepdim=True)
         hole_mask = 1 - warp_mask
         diff_mask = (diff_map > 0.1).to(im0.dtype)
@@ -73,9 +75,9 @@ class MaskGuideNet(nn.Module):
 
 
 class BiW(nn.Module):
-    def __init__(self, base_channel, fix_warp=False):
+    def __init__(self, base_channel, fix_warp=False, fix_mask_grad=False):
         super().__init__()
-        self.fuse_warp = MaskGuideNet(base_channel, fix_warp=fix_warp)
+        self.fuse_warp = MaskGuideNet(base_channel, fix_warp=fix_warp, fix_mask_grad=fix_mask_grad)
         self.channel_squeeze0 = nn.Conv2d(128, 32, 1, 1, 0, bias=True)
         self.channel_squeeze1 = nn.Conv2d(128, 32, 1, 1, 0, bias=True)
         self.refine_blocks = ResBlockIF(3+128, 64)

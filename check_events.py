@@ -24,9 +24,10 @@ def inspect_scene(scene, bsergb=False, skip=31, bins=128):
     required = max(0, len(images) - 1)
     if len(events) < required:
         bad.append(f"need at least images - 1 event files; got {len(events)} vs {len(images)} images")
+    elif len(events) > len(images):
+        bad.append(f"{len(events)} event files for {len(images)} images: multiple event files per interval")
     elif len(events) > required:
-        print(f"[warn] {len(events) - required} extra trailing event file(s) ignored "
-              "(verify first-file index before training)")
+        print("[warn] 1 extra trailing event file ignored; verify alignment")
     lexical = sorted(p.name for p in events)
     numeric = natural_sort([p.name for p in events])
     if lexical != numeric:

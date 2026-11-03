@@ -16,5 +16,6 @@ python train_model.py \
     --fix_voxel \
     --lpips_normalize \
     --fwd_loss_weight 0.1 \
+    --fix_mask_grad \
     --seed 1234 \
     "$@"

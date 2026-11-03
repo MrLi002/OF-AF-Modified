@@ -93,6 +93,8 @@ def test_extra_trailing_events_allowed_and_missing_rejected():
         assert validate_interval_file_count(4, 4, "scene") == 3
     with pytest.raises(ValueError, match="need at least images - 1"):
         validate_interval_file_count(4, 2, "scene")
+    with pytest.raises(ValueError, match="expected images - 1"):
+        validate_interval_file_count(4, 24, "scene")
 
 
 def test_splat_valid_mask_has_safe_threshold_and_no_grad():
@@ -124,3 +126,11 @@ def test_check_ckpt_moment_ratio():
     assert abs(forward_median - 0.01) < 1e-6
     assert reference_median == 1.0
     assert abs(ratio - 0.01) < 1e-6
+
+
+def test_bsergb_timestamps_keep_integer_resolution(tmp_path):
+    path = tmp_path / "bsergb.npz"
+    np.savez(path, x=np.array([0, 32, 64]), y=np.array([0, 32, 64]),
+             timestamp=np.array([1000000000, 1000000001, 1000000002], dtype=np.int64),
+             polarity=np.array([0, 1, 1]))
+    assert np.unique(load_events(path, bsergb=True)[:, 2]).size == 3

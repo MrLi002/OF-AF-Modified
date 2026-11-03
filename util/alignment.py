@@ -24,11 +24,8 @@ def validate_interval_file_count(image_count, event_count, scene):
             f"{scene}: need at least images - 1 event files "
             f"({required} needed for {image_count} images, found {event_count})"
         )
+    if event_count > image_count:
+        raise ValueError(f"{scene}: {event_count} events for {image_count} images; expected images - 1 or images, not multiple files per interval")
     if event_count > required:
-        warnings.warn(
-            f"{scene}: ignoring {event_count - required} extra trailing event file(s); "
-            "verify that event file 0 corresponds to image frame 0 -> 1",
-            UserWarning,
-            stacklevel=2,
-        )
+        warnings.warn(f"{scene}: ignoring 1 extra trailing event file; verify alignment", UserWarning, stacklevel=2)
     return required

@@ -14,6 +14,7 @@ class MyModel(nn.Module):
 		self.nb_of_flow = args.nb_of_flow
 		self.fix_query = getattr(args, "fix_query", False)
 		self.fix_warp = getattr(args, "fix_warp", False)
+		self.fix_mask_grad = getattr(args, "fix_mask_grad", False)
 		self.bins_per_flow = self.voxel_bins//self.nb_of_flow
 
 		self.events_encoder = EventsEncoder(self.voxel_bins, self.base_channel, bins_per_flow=self.bins_per_flow)
@@ -21,7 +22,7 @@ class MyModel(nn.Module):
 		self.bidir_flow0 = BidirFlow(self.base_channel, fix_warp=self.fix_warp)
 		self.bidir_flow1 = BidirFlow(self.base_channel, fix_warp=self.fix_warp)
 		self.query = Query(self.base_channel, fix_query=self.fix_query)
-		self.biw = BiW(self.base_channel, fix_warp=self.fix_warp)
+		self.biw = BiW(self.base_channel, fix_warp=self.fix_warp, fix_mask_grad=self.fix_mask_grad)
 
 	def forward(self, im0, im1, event, interp_times, return_aux=False):
 		efs01 = self.events_encoder(im0, im1, event)
